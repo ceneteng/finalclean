@@ -1,0 +1,112 @@
+- name: create ec2 instances
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+
+  - name: get VPC facts
+    ec2_vpc_net_facts:
+      region: us-east-1
+      filters:
+        "tag:Name" : "TestVPC"
+    register: vpcfacts
+
+  - debug:
+      var: vpcfacts
+  
+  - name: get vpc ID
+    set_fact: 
+      vpc_ids: "{{ vpcfacts.vpcs|map(attribute='id')|list }}"
+
+  - name: create alb sec group
+    ec2_group:
+      name: TestALBSG
+      region: us-east-1
+      description: sg for application load balancer
+      vpc_id: "{{ vpc_ids.0 }}"
+    register: alb
+
+  - name: create bastion sec group
+    ec2_group:
+      name: TestBastion
+      region: us-east-1
+      description: sg for wordpress
+      vpc_id: "{{ vpc_ids.0 }}"
+    register: bast
+
+  - name: create wp sec group
+    ec2_group:
+      name: TestWPSG
+      region: us-east-1
+      description: sg for wordpress
+      vpc_id: "{{ vpc_ids.0 }}"
+      rules: 
+        - proto: tcp
+          ports:
+          - 80
+          group_id: "{{ alb.group_id }}"
+        - proto: tcp
+          ports:
+          - 22
+          group_id: "{{ bast.group_id }}"
+    register: wp
+
+  - name: update alb sec group
+    ec2_group:
+      name: TestALBSG
+      region: us-east-1
+      description: sg for application load balancer
+      vpc_id: "{{ vpc_ids.0 }}"
+      rules:
+        - proto: tcp
+          ports:
+          - 80
+          cidr_ip: 0.0.0.0/0
+      rules_egress:
+        - proto: tcp
+          ports:
+          - 80
+          group_id: "{{ wp.group_id }}"
+
+  - name: update bastion sec group
+    ec2_group:
+      name: TestBastion
+      region: us-east-1
+      description: sg for wordpress
+      vpc_id: "{{ vpc_ids.0 }}"
+      rules:
+        - proto: tcp
+          ports:
+          - 22
+          cidr_ip: 198.207.185.100/32
+      rules_egress:
+        - proto: tcp
+          ports:
+          - 22
+          group_id: "{{ wp.group_id }}"
+
+  - name: get subnets
+    ec2_vpc_subnet_facts:
+      region: us-east-1
+      filters:
+        "tag:Name" : PublicSubnetTest
+    register: snetfacts
+  
+  - name: subnet id
+    set_fact:
+      subnet_ids: "{{ snetfacts.subnets|map(attribute='id')|list }}"
+
+  - name: provision instances
+    ec2:
+      key_name: Mac
+      group: "TestBastion"
+      region: us-east-1
+      instance_type: t2.micro
+      image: ami-01ab44c1bdbab4161
+      vpc_subnet_id: "{{ subnet_ids.0 }}"
+      assign_public_ip: yes
+      exact_count: 1
+      count_tag:
+        Name: TestBastion
+      instance_tags:
+        Name: bastion

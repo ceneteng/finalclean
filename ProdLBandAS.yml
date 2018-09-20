@@ -1,0 +1,108 @@
+- name: create autoscaling group
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks: 
+
+  - name: get VPC facts
+    ec2_vpc_net_facts:
+      region: us-east-1
+      filters:
+        "tag:Name" : ProductionVPC
+    register: vpcfacts
+
+  - debug:
+      var: vpcfacts
+  
+  - name: get vpc ID
+    set_fact: 
+      vpc_ids: "{{ vpcfacts.vpcs|map(attribute='id')|list }}"
+
+  - name: get pub subnets
+    ec2_vpc_subnet_facts:
+      region: us-east-1
+      filters:
+        "tag:Name" : "PublicSubnet*Prod"
+    register: snetfacts
+      
+  - name: priv subnet id
+    set_fact:
+      pub_subnet_ids: "{{ snetfacts.subnets|map(attribute='id')|list }}"
+  
+  - name: get pub subnets
+    ec2_vpc_subnet_facts:
+      region: us-east-1
+      filters:
+        "tag:Name" : "PrivateSubnetProd"
+    register: psnetfacts
+      
+  - name: priv subnet id
+    set_fact:
+      priv_subnet_ids: "{{ psnetfacts.subnets|map(attribute='id')|list }}"
+
+  - debug:
+      var: priv_subnet_ids
+      var: pub_subnet_ids
+
+  - name: create target group
+    elb_target_group:
+      region: us-east-1
+      name: wordpressProd
+      protocol: http
+      port: 80
+      vpc_id: "{{ vpc_ids.0 }}"
+      state: present
+    register: tg
+
+  - name: create launch config
+    ec2_lc:
+      region: us-east-1
+      name: wpProd
+      image_id: ami-0deb7519e45d38c7d
+      key_name: devbox
+      security_groups: ProdWPSG
+      instance_type: t2.micro
+      volumes:
+      - device_name: /dev/sda1
+        volume_size: 8
+        volume_type: gp2
+        delete_on_termination: true
+      vpc_id: "{{ vpc_ids.0 }}"
+      assign_public_ip: no
+ 
+
+  - name: add asg
+    ec2_asg:
+      name: wordpressProd
+      region: us-east-1
+      launch_config_name: wpProd
+      availability_zones: [ 'us-east-1e', 'us-east-1f' ]
+      min_size: 3
+      max_size: 5
+      desired_capacity: 3
+      vpc_zone_identifier: "{{ pub_subnet_ids }}"
+      tags:
+        - Env: test
+      target_group_arns: "{{ tg.target_group_arn }}"
+
+
+
+  - elb_application_lb:
+      name: wpalbProd
+      region: us-east-1
+      security_groups:
+        - ProdALBSG
+      subnets: "{{ pub_subnet_ids }}"
+      state: present
+      listeners:
+        - Protocol: HTTP # Required. The protocol for connections from clients to the load balancer (HTTP or HTTPS) (case-sensitive).
+          Port: 80 # Required. The port on which the load balancer is listening.
+          DefaultActions:
+            - Type: forward # Required. Only 'forward' is accepted at this time
+              TargetGroupName: wordpressProd # Required. The name of the target group
+    state: present
+
+
+
+
+
