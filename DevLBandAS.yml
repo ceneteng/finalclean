@@ -68,7 +68,7 @@
         volume_type: gp2
         delete_on_termination: true
       vpc_id: "{{ vpc_ids.0 }}"
-      assign_public_ip: no
+      assign_public_ip: yes
  
 
   - name: add asg
